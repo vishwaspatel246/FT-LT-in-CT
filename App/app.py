@@ -313,4 +313,5 @@ if laplace_exists and show_Xs_sigma:
         ax_Xs.set_xlabel("σ"); ax_Xs.set_ylabel("|X(s)|"); ax_Xs.grid(True)
         st.pyplot(fig_Xs)
     except Exception as e:
+
         st.info(f"|X(s)| plot failed: {e}")
