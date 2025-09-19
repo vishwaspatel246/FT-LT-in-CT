@@ -44,10 +44,7 @@ def pretty_roc_piece(cond):
 from sympy import Piecewise
 
 def is_compact_support(expr, t):
-    # crude check: signal becomes 0 outside finite interval
-    return expr.has(sp.Heaviside) and (
-        "Heaviside" in str(expr) and "-" in str(expr)
-    )
+    return expr.has(sp.Heaviside) and ("Heaviside" in str(expr) and "-" in str(expr))
 
 
 # Sidebar: signal selection 
@@ -73,6 +70,12 @@ t1_sample = float(st.sidebar.number_input("End time (t1)", value=5.0, step=0.1))
 pts = int(st.sidebar.slider("Time points (sampling)", 200, 8000, 1600, step=100))
 
 st.sidebar.markdown("---")
+st.sidebar.subheader("Frequency axis range (for FFT)")
+
+freq_min = st.sidebar.number_input("Min frequency", value=-50.0, step=1.0)
+freq_max = st.sidebar.number_input("Max frequency", value=50.0, step=1.0)
+
+st.sidebar.markdown("---")
 st.sidebar.subheader("Transforms / plots options")
 show_laplace_symbolic = st.sidebar.checkbox("Show Laplace (symbolic)", value=True)
 show_fourier_symbolic = st.sidebar.checkbox("Show Fourier (symbolic)", value=False)
@@ -81,22 +84,19 @@ show_Xs_sigma = st.sidebar.checkbox("|X(s)| vs σ plot (for fixed ω)", value=Tr
 omega_for_sigma = float(st.sidebar.number_input("ω for |X(s)| plot (rad/s)", value=0.0, step=0.1))
 sigma_range = st.sidebar.slider("σ range for |X(s)| plot", -10.0, 10.0, (-5.0, 5.0), step=0.5)
 
+
+
+
 # Build symbolic expression
-st.header("Signal (symbolic & numeric)")
 locals_map = {"t": t, "Heaviside": sp.Heaviside, "DiracDelta": sp.DiracDelta,
               "sin": sp.sin, "cos": sp.cos, "exp": sp.exp, "pi": sp.pi}
-
 try:
     x_sym = sp.sympify(preprocess_expr(custom_expr), locals=locals_map)
 except Exception as e:
     st.error(f"Could not parse expression. SymPy error: {e}")
     st.stop()
 
-st.subheader("Symbolic x(t) (plain)")
-st.write(plain_str(x_sym))
-
 t_vals = np.linspace(t0_sample, t1_sample, pts)
-
 # Numeric evaluation 
 x_vals = None
 if x_sym.has(sp.DiracDelta):
@@ -107,18 +107,37 @@ else:
         x_vals = np.array(f_num(t_vals), dtype=float)
     except Exception as e:
         st.error(f"Numeric evaluation failed: {e}")
+tab_signal, tab_results, tab_fft, tab_laplace_sigma = st.tabs(
+    ["Signal", "Results", "Fourier (FFT)", "|X(s)| vs σ"]
+)
 
-# Time-domain plot
-if x_vals is not None:
-    fig_t, ax_t = plt.subplots(figsize=(7,3))
-    ax_t.plot(t_vals, x_vals)
-    ax_t.set_xlabel("t"); ax_t.set_ylabel("x(t)"); ax_t.grid(True)
-    ax_t.set_title("Time-domain signal x(t)")
-    st.pyplot(fig_t)
+# --- Signal Tab ---
+with tab_signal:
+    st.header("Signal (symbolic & numeric)")
+    st.subheader("Symbolic x(t) (plain)")
+    st.write(plain_str(x_sym))
 
-# -------------------------
+    t_vals = np.linspace(t0_sample, t1_sample, pts)
+    x_vals = None
+    if x_sym.has(sp.DiracDelta):
+        st.info("Time-domain numeric plot skipped: DiracDelta cannot be numerically evaluated.")
+    else:
+        try:
+            f_num = safe_lambdify(x_sym, t)
+            x_vals = np.array(f_num(t_vals), dtype=float)
+        except Exception as e:
+            st.error(f"Numeric evaluation failed: {e}")
+
+    if x_vals is not None:
+        fig_t, ax_t = plt.subplots(figsize=(7,3))
+        ax_t.plot(t_vals, x_vals)
+        ax_t.set_xlabel("t"); ax_t.set_ylabel("x(t)"); ax_t.grid(True)
+        ax_t.set_title("Time-domain signal x(t)")
+        st.pyplot(fig_t)
+
+
+
 # Robust Laplace handling
-# -------------------------
 def parse_roc_strings(rocs_raw):
     """Return (lower_bounds_list, upper_bounds_list, pretty_list)."""
     lower_bounds = []
@@ -129,7 +148,6 @@ def parse_roc_strings(rocs_raw):
             continue
         s = str(cond)
         pretty.append(pretty_roc_piece(cond))
-        # regex for Re(s) > number or Re(s) < number
         m_gt = re.search(r'Re\(s\)\s*>\s*([-+]?\d+(\.\d+)?)', s)
         m_lt = re.search(r'Re\(s\)\s*<\s*([-+]?\d+(\.\d+)?)', s)
         if m_gt:
@@ -196,9 +214,9 @@ def analyze_roc_from_terms(terms, signal_expr=None):
     # If both right-sided and left-sided exponentials with incompatible ROCs -> no LT
     try:
         two_sided_flag = (signal_expr is not None and
-                          signal_expr.has(sp.Heaviside(t)) and
-                          signal_expr.has(sp.Heaviside(-t)) and
-                          (signal_expr.has(sp.exp(t)) or signal_expr.has(sp.exp(2*t)) or signal_expr.has(sp.exp(sp.Symbol('a')*t)) ))
+                        signal_expr.has(sp.Heaviside(t)) and
+                        signal_expr.has(sp.Heaviside(-t)) and
+                        (signal_expr.has(sp.exp(t)) or signal_expr.has(sp.exp(2*t)) or signal_expr.has(sp.exp(sp.Symbol('a')*t)) ))
         if two_sided_flag:
             # additional check: if rocs_raw indicate right and left bounds that conflict -> no LT
             if lower_bounds and upper_bounds:
@@ -256,10 +274,7 @@ def analyze_roc_from_terms(terms, signal_expr=None):
     # fallback: no valid ROC info found
     return False, "Laplace Transform does NOT exist (no valid ROC found from term conditions).", Xs_expr, pretty_list
 
-# -----------------------------
 # Fourier & Laplace existence
-# -----------------------------
-st.header("Transforms & Existence checks")
 fourier_exists = False
 fourier_note = ""
 
@@ -274,9 +289,26 @@ elif (x_sym.has(sp.sin) or x_sym.has(sp.cos)) and not x_sym.has(sp.Heaviside):
     fourier_note = "Pure sinusoid: FT exists only in distribution sense (impulses at ±ω₀)."
 
 elif (x_sym.has(sp.sin) or x_sym.has(sp.cos)) and x_sym.has(sp.Heaviside):
-    # Causal sinusoid
-    fourier_exists = False
-    fourier_note = "Causal sinusoid: FT does NOT exist (not absolutely integrable)."
+    # Check if exponential decay is present with negative real coefficient
+    decay_found = False
+    for e in x_sym.atoms(sp.exp):
+        arg = e.args[0]
+        if arg.has(t):
+            coeff = sp.simplify(arg/t)
+            try:
+                coeff_val = float(coeff)
+                if coeff_val < 0:   # true decay
+                    decay_found = True
+                    break
+            except Exception:
+                pass
+    if decay_found:
+        fourier_exists = True
+        fourier_note = "Decaying sinusoid: FT exists (peaks around ±ω₀)."
+    else:
+        fourier_exists = False
+        fourier_note = "Causal sinusoid without decay: FT does NOT exist."
+
     
 elif x_sym == sp.Heaviside(t):
     fourier_exists = False
@@ -297,9 +329,8 @@ else:
         fourier_note = "Could not determine absolute integrability ⇒ assume FT does not exist."
 
 
-# -----------------------------
-# Laplace Transform (clean + working)
-# -----------------------------
+
+# Laplace Transform 
 laplace_exists = False
 laplace_note = ""
 laplace_expr_plain = None
@@ -422,128 +453,126 @@ if show_laplace_symbolic and (x_sym.has(sp.sin) or x_sym.has(sp.cos)) and not x_
         laplace_expr_plain = None
         laplace_cond_plain = None
 
+    
 
-# if show_laplace_symbolic:
-#     try:
-#         terms = x_sym.as_ordered_terms()
-#         laplace_exists, laplace_note, Xs_expr, roc_pretty = analyze_roc_from_terms(terms, signal_expr=x_sym)
-#         laplace_expr_plain = plain_str(Xs_expr) if Xs_expr is not None else None
-#         if roc_pretty:
-#             laplace_cond_plain = " & ".join([p for p in roc_pretty if p])
-#         else:
-#             laplace_cond_plain = None
-#     except Exception as e:
-#         laplace_exists = False
-#         laplace_note = f"Laplace symbolic failed: {e}"
-#         Xs_expr = None
-#         laplace_cond_plain = None
+# --- Results Tab ---
+with tab_results:
+    tab1, tab2 = st.tabs([" Fourier Transform"," Laplace Transform"])
 
-# Results panel 
-st.subheader("Results summary")
-col1, col2 = st.columns(2)
+    with tab1:
+        st.header("Fourier Transform Results")
+        if fourier_exists:
+            st.success("Fourier Transform Exists")
+        else:
+            st.error("Fourier Transform Does NOT Exist")
+        st.write(fourier_note)
+        if sympy_fourier is not None:
+            st.subheader("Symbolic FT X(ω)")
+            st.latex(sp.latex(sympy_fourier))
 
-with col1:
-    st.write("*Fourier Transform*")
-    if fourier_exists:
-        st.success("Exists")
-    else:
-        st.error("Does NOT exist")
-    st.write(fourier_note)
-    if sympy_fourier is not None:
-        st.write("Symbolic FT (ω domain):")
-        st.latex(sp.latex(sympy_fourier))
-
-with col2:
-    st.write("*Laplace Transform*")
-    if laplace_exists:
-        st.success("Exists")
+    with tab2:
+        st.header("Laplace Transform Results")
+        if laplace_exists:
+            st.success("Laplace Transform Exists")
+        else:
+            st.error("Laplace Transform Does NOT Exist")
         st.write(laplace_note)
-        if laplace_expr_plain:
-            st.write("Symbolic LT (s domain):")
+        if laplace_expr_plain is not None:
+            st.subheader("Symbolic LT X(s)")
             st.latex(sp.latex(Xs_expr))
-        if laplace_cond_plain:
-            st.write(f"Valid ROC / Condition: {laplace_cond_plain}")
-    else:
-        st.error("Does NOT exist")
-        st.write("Laplace Transform does not exist for this signal (invalid or empty ROC).")
-        if laplace_expr_plain:
-            st.write("Symbolic LT (s domain, but invalid ROC):")
-            st.latex(sp.latex(Xs_expr))
-        if laplace_cond_plain:
-            st.write(f"Conflicting ROC / Condition: {laplace_cond_plain}")
+        if laplace_cond_plain is not None:
+            st.subheader("Region of Convergence (ROC)")
+            st.write(laplace_cond_plain)
+    
 
-# Fourier numeric spectrum 
-if show_fft_numeric:
-    if fourier_exists:
-        if x_sym.has(sp.DiracDelta):
-            st.subheader("Fourier Transform of shifted δ(t-a)")
+# --- FFT Tab ---
+with tab_fft:
+    # Fourier numeric spectrum 
+    if show_fft_numeric:
+        if fourier_exists:
+            if x_sym.has(sp.DiracDelta):
+                st.subheader("Fourier Transform of shifted δ(t-a)")
 
-            delta_atom = list(x_sym.atoms(sp.DiracDelta))[0]
-            shift_expr = delta_atom.args[0]   # e.g., δ(t-2) → shift_expr = t-2
+                delta_atom = list(x_sym.atoms(sp.DiracDelta))[0]
+                shift_expr = delta_atom.args[0]   # e.g., δ(t-2) → shift_expr = t-2
 
-            # Extract numeric 'a' from δ(t-a)
+                # Extract numeric 'a' from δ(t-a)
+                try:
+                    # Solve t - a = 0 → a
+                    a_val = sp.solve(shift_expr, t)[0]
+                    a_val = float(a_val)
+                except Exception:
+                    a_val = 0.0   # fallback if not numeric
+
+                omega_vals = np.linspace(-20, 20, 400)
+                X_vals = np.exp(-1j * omega_vals * a_val)
+
+                fig_delta, ax_delta = plt.subplots(figsize=(7,3))
+                ax_delta.plot(omega_vals, np.abs(X_vals))
+                ax_delta.set_xlabel("Frequency (ω)")
+                ax_delta.set_ylabel("|X(ω)|")
+                ax_delta.set_title(f"FT of δ(t-{a_val}): |X(ω)| = 1, phase = -ω·{a_val}")
+                ax_delta.grid(True)
+                st.pyplot(fig_delta)
+
+
+            elif (x_sym.has(sp.sin) or x_sym.has(sp.cos)) and not x_sym.has(sp.exp) and not x_sym.has(sp.Heaviside):
+                # Pure infinite-duration sinusoid
+                st.subheader("Fourier Transform of sinusoid")
+                st.info("Pure sinusoids are not absolutely integrable, but their FT exists in distribution sense: impulses at ±ω₀.")
+                try:
+                    arg = (x_sym.atoms(sp.sin) | x_sym.atoms(sp.cos)).pop().args[0]
+                    omega0 = float(sp.simplify(arg/t))
+                except Exception:
+                    omega0 = 1.0
+                fig_imp, ax_imp = plt.subplots(figsize=(7,3))
+                ax_imp.axvline(omega0, linestyle='--', ymax=0.8)
+                ax_imp.axvline(-omega0, linestyle='--', ymax=0.8)
+                ax_imp.set_xlabel("Frequency (ω)")
+                ax_imp.set_ylabel("Impulse strength")
+                ax_imp.set_title("FT of sinusoid: impulses at ±ω₀")
+                ax_imp.grid(True)
+                st.pyplot(fig_imp)
+
+            elif x_vals is not None:
+                st.subheader("Fourier Numeric Spectrum (FFT)")
+                dt = (t1_sample - t0_sample) / pts
+                freq_vals = np.fft.fftshift(np.fft.fft(x_vals))
+                freq_axis = np.fft.fftshift(np.fft.fftfreq(len(x_vals), dt))
+
+                # create figure and axis properly
+                fig_fft_view, ax_fft_view = plt.subplots(figsize=(7,3))
+                ax_fft_view.plot(freq_axis, np.abs(freq_vals))
+                ax_fft_view.set_xlabel("Frequency (Hz)")
+                ax_fft_view.set_ylabel("|X(f)|")
+                ax_fft_view.set_title("Fourier Magnitude Spectrum (numeric FFT)")
+
+                # use user-selected limits instead of automatic
+                ax_fft_view.set_xlim(freq_min, freq_max)
+
+                ax_fft_view.grid(True)
+                st.pyplot(fig_fft_view)
+
+        else:
+            st.info("Fourier Transform does not exist for this signal (no FFT shown).")
+
+    
+
+# --- Laplace |X(s)| vs σ Tab ---
+with tab_laplace_sigma:
+    if show_Xs_sigma:
+        if laplace_exists and Xs_expr is not None:
+            st.subheader("|X(s)| vs σ for ω={}".format(omega_for_sigma))
+            sigma_vals = np.linspace(sigma_range[0], sigma_range[1], 400)
+            Xs_abs_vals = []
             try:
-                # Solve t - a = 0 → a
-                a_val = sp.solve(shift_expr, t)[0]
-                a_val = float(a_val)
-            except Exception:
-                a_val = 0.0   # fallback if not numeric
-
-            omega_vals = np.linspace(-20, 20, 400)
-            X_vals = np.exp(-1j * omega_vals * a_val)
-
-            fig_delta, ax_delta = plt.subplots(figsize=(7,3))
-            ax_delta.plot(omega_vals, np.abs(X_vals))
-            ax_delta.set_xlabel("Frequency (ω)")
-            ax_delta.set_ylabel("|X(ω)|")
-            ax_delta.set_title(f"FT of δ(t-{a_val}): |X(ω)| = 1, phase = -ω·{a_val}")
-            ax_delta.grid(True)
-            st.pyplot(fig_delta)
-
-
-        elif x_sym.has(sp.sin) or x_sym.has(sp.cos):
-            st.subheader("Fourier Transform of sinusoid")
-            st.info("Pure sinusoids are not absolutely integrable, but their FT exists in distribution sense: impulses at ±ω₀.")
-            try:
-                arg = (x_sym.atoms(sp.sin) | x_sym.atoms(sp.cos)).pop().args[0]  # e.g. 2*pi*t
-                omega0 = float(sp.simplify(arg/t))   # extract numeric frequency
-            except Exception:
-                omega0 = 1.0
-            fig_imp, ax_imp = plt.subplots(figsize=(7,3))
-            ax_imp.axvline(omega0, linestyle='--', ymax=0.8)
-            ax_imp.axvline(-omega0, linestyle='--', ymax=0.8)
-            ax_imp.set_xlabel("Frequency (ω)")
-            ax_imp.set_ylabel("Impulse strength")
-            ax_imp.set_title("FT of sinusoid: impulses at ±ω₀")
-            ax_imp.grid(True)
-            st.pyplot(fig_imp)
-
-        elif x_vals is not None:
-            st.subheader("Fourier Numeric Spectrum (FFT)")
-            dt = (t1_sample - t0_sample) / pts
-            freq_vals = np.fft.fftshift(np.fft.fft(x_vals))
-            freq_axis = np.fft.fftshift(np.fft.fftfreq(len(x_vals), dt))
-            fig_fft, ax_fft = plt.subplots(figsize=(7,3))
-            ax_fft.plot(freq_axis, np.abs(freq_vals))
-            ax_fft.set_xlabel("Frequency (Hz)"); ax_fft.set_ylabel("|X(f)|"); ax_fft.set_title("Fourier Magnitude Spectrum")
-            ax_fft.grid(True); st.pyplot(fig_fft)
-    else:
-        st.info("Fourier Transform does not exist for this signal (no FFT shown).")
-
-# Laplace |X(s)| vs sigma
-if show_Xs_sigma:
-    if laplace_exists and Xs_expr is not None:
-        st.subheader("|X(s)| vs σ for ω={}".format(omega_for_sigma))
-        sigma_vals = np.linspace(sigma_range[0], sigma_range[1], 400)
-        Xs_abs_vals = []
-        try:
-            f_Xs = sp.lambdify(s, Xs_expr, "numpy")
-            for sigma_val in sigma_vals:
-                Xs_abs_vals.append(abs(f_Xs(sigma_val + 1j*omega_for_sigma)))
-            fig_Xs, ax_Xs = plt.subplots(figsize=(7,3))
-            ax_Xs.plot(sigma_vals, Xs_abs_vals)
-            ax_Xs.set_xlabel("σ"); ax_Xs.set_ylabel("|X(s)|"); ax_Xs.grid(True); st.pyplot(fig_Xs)
-        except Exception as e:
-            st.info(f"|X(s)| plot failed: {e}")
-    else:
-        st.info("Laplace Transform does not exist for this signal (no |X(s)| plot shown).")
+                f_Xs = sp.lambdify(s, Xs_expr, "numpy")
+                for sigma_val in sigma_vals:
+                    Xs_abs_vals.append(abs(f_Xs(sigma_val + 1j*omega_for_sigma)))
+                fig_Xs, ax_Xs = plt.subplots(figsize=(7,3))
+                ax_Xs.plot(sigma_vals, Xs_abs_vals)
+                ax_Xs.set_xlabel("σ"); ax_Xs.set_ylabel("|X(s)|"); ax_Xs.grid(True); st.pyplot(fig_Xs)
+            except Exception as e:
+                st.info(f"|X(s)| plot failed: {e}")
+        else:
+            st.info("Laplace Transform does not exist for this signal (no |X(s)| plot shown).")
