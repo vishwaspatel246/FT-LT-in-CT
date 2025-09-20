@@ -306,8 +306,8 @@ elif (x_sym.has(sp.sin) or x_sym.has(sp.cos)) and x_sym.has(sp.Heaviside):
         fourier_exists = True
         fourier_note = "Decaying sinusoid: FT exists (peaks around ±ω₀)."
     else:
-        fourier_exists = False
-        fourier_note = "Causal sinusoid without decay: FT does NOT exist."
+        fourier_exists = True
+        fourier_note = "Causal sinusoid without decay: FT does NOT exist in the classical sense, but exists in the distribution sense (impulses on jω-axis)."
 
     
 elif x_sym == sp.Heaviside(t):
