@@ -82,7 +82,7 @@ show_fourier_symbolic = st.sidebar.checkbox("Show Fourier (symbolic)", value=Fal
 show_fft_numeric = st.sidebar.checkbox("Show Fourier (numeric FFT)", value=True)
 show_Xs_sigma = st.sidebar.checkbox("|X(s)| vs σ plot (for fixed ω)", value=True)
 omega_for_sigma = float(st.sidebar.number_input("ω for |X(s)| plot (rad/s)", value=0.0, step=0.1))
-sigma_range = st.sidebar.slider("σ range for |X(s)| plot", -10.0, 10.0, (-5.0, 5.0), step=0.5)
+sigma_range = st.sidebar.slider("σ range for |X(s)| plot", -50.0, 50.0, (-5.0, 5.0), step=0.5)
 
 
 
@@ -107,8 +107,8 @@ else:
         x_vals = np.array(f_num(t_vals), dtype=float)
     except Exception as e:
         st.error(f"Numeric evaluation failed: {e}")
-tab_signal, tab_results, tab_fft, tab_laplace_sigma = st.tabs(
-    ["Signal", "Results", "Fourier (FFT)", "|X(s)| vs σ"]
+tab_signal, tab_results, tab_fft, tab_laplace_sigma, tab_comparison = st.tabs(
+    ["Signal", "Results", "Fourier (FFT)", "|X(s)| vs σ", "Comparison"]
 )
 
 # --- Signal Tab ---
@@ -357,11 +357,28 @@ if show_laplace_symbolic:
         elif x_sym.is_polynomial(t) and x_sym.has(sp.Heaviside):
             laplace_cond_plain = "Re(s) > 0"
 
-        elif x_sym.has(sp.sin) and x_sym.has(sp.Heaviside):
-            laplace_cond_plain = "Re(s) > 0"
+        elif (x_sym.has(sp.sin) or x_sym.has(sp.cos)) and x_sym.has(sp.Heaviside):
+            # Try to detect exponential decay factor
+            a_val = None
+            for e in x_sym.atoms(sp.exp):
+                arg = e.args[0]
+                if arg.has(t):
+                    coeff = sp.simplify(arg / t)
+                    try:
+                        coeff_val = float(coeff)
+                        a_val = coeff_val
+                        break
+                    except Exception:
+                        pass
 
-        elif x_sym.has(sp.cos) and x_sym.has(sp.Heaviside):
-            laplace_cond_plain = "Re(s) > 0"
+            if a_val is not None:
+                # For exp(coeff*t), ROC is Re(s) > -coeff
+                laplace_cond_plain = f"Re(s) > {-a_val}"
+                laplace_note = f"Laplace transform exists (ROC: Re(s) > {-a_val})."
+            else:
+                # Default case: no decay factor, ROC is Re(s) > 0
+                laplace_cond_plain = "Re(s) > 0"
+                laplace_note = "Laplace transform exists (ROC: Re(s) > 0)."
 
         elif x_sym.has(sp.DiracDelta):
             laplace_cond_plain = "All s"
@@ -399,13 +416,37 @@ elif show_fourier_symbolic and not fourier_exists:
 # laplace_cond_plain = None
 # Xs_expr = None
 # Special case: sin/cos with Heaviside
+# Special case: sin/cos with Heaviside
+# Special case: sin/cos with Heaviside
 if show_laplace_symbolic and (x_sym.has(sp.sin) or x_sym.has(sp.cos)) and x_sym.has(sp.Heaviside):
     try:
         Xs_expr = sp.laplace_transform(x_sym, t, s, noconds=True)
         laplace_expr_plain = plain_str(Xs_expr)
         laplace_exists = True
-        laplace_note = "Laplace transform exists (ROC: Re(s) > 0)."
-        laplace_cond_plain = "Re(s) > 0"
+
+        # Detect exponential decay/growth coefficient
+        a_val = None
+        for e in x_sym.atoms(sp.exp):
+            arg = e.args[0]
+            if arg.has(t):
+                coeff = sp.simplify(arg / t)
+                try:
+                    coeff_val = float(coeff)
+                    a_val = coeff_val
+                    break
+                except Exception:
+                    pass
+
+        if a_val is not None:
+            # For exp(a*t)·u(t), ROC is Re(s) > a
+            roc_bound = a_val
+            laplace_note = f"Laplace transform exists (ROC: Re(s) > {roc_bound})."
+            laplace_cond_plain = f"Re(s) > {roc_bound}"
+        else:
+            # Default: no exponential → ROC is Re(s) > 0
+            laplace_note = "Laplace transform exists (ROC: Re(s) > 0)."
+            laplace_cond_plain = "Re(s) > 0"
+
     except Exception as e:
         laplace_exists = False
         laplace_note = f"Laplace symbolic failed: {e}"
@@ -536,21 +577,46 @@ with tab_fft:
 
             elif x_vals is not None:
                 st.subheader("Fourier Numeric Spectrum (FFT)")
-                dt = (t1_sample - t0_sample) / pts
-                freq_vals = np.fft.fftshift(np.fft.fft(x_vals))
-                freq_axis = np.fft.fftshift(np.fft.fftfreq(len(x_vals), dt))
 
-                # create figure and axis properly
+                # correct dt from the actual sampled time vector
+                dt = t_vals[1] - t_vals[0]
+
+                # compute FFT and scale by dt to approximate continuous-time FT
+                Xf = np.fft.fft(x_vals) * dt
+                Xf_shift = np.fft.fftshift(Xf)
+                freq_axis = np.fft.fftshift(np.fft.fftfreq(len(x_vals), dt))  # in Hz
+
+                # plot numeric FFT
                 fig_fft_view, ax_fft_view = plt.subplots(figsize=(7,3))
-                ax_fft_view.plot(freq_axis, np.abs(freq_vals))
+                ax_fft_view.plot(freq_axis, np.abs(Xf_shift), label="numeric FFT (scaled)")
+
+                # optional: overlay analytic FT if the signal is exp(-a t)·u(t)
+                # try:
+                #     a_val = None
+                #     for e in x_sym.atoms(sp.exp):
+                #         arg = e.args[0]
+                #         if arg.has(t):
+                #             coeff = sp.simplify(arg / t)
+                #             try:
+                #                 coefff = float(coeff)
+                #                 if x_sym.has(sp.Heaviside) and coefff < 0:
+                #                     a_val = -coefff
+                #                     break
+                #             except Exception:
+                #                 pass
+                #     if a_val is not None:
+                #         analytic = 1.0 / np.sqrt(a_val**2 + (2*np.pi*freq_axis)**2)
+                #         ax_fft_view.plot(freq_axis, analytic, linestyle='--',
+                #                         label=f"analytic 1/√(a²+(2πf)²), a={a_val:.3g}")
+                # except Exception:
+                #     pass
+
                 ax_fft_view.set_xlabel("Frequency (Hz)")
                 ax_fft_view.set_ylabel("|X(f)|")
-                ax_fft_view.set_title("Fourier Magnitude Spectrum (numeric FFT)")
-
-                # use user-selected limits instead of automatic
+                ax_fft_view.set_title("Fourier Magnitude Spectrum (numeric FFT, scaled)")
                 ax_fft_view.set_xlim(freq_min, freq_max)
-
                 ax_fft_view.grid(True)
+                ax_fft_view.legend()
                 st.pyplot(fig_fft_view)
 
         else:
@@ -576,3 +642,94 @@ with tab_laplace_sigma:
                 st.info(f"|X(s)| plot failed: {e}")
         else:
             st.info("Laplace Transform does not exist for this signal (no |X(s)| plot shown).")
+# --- Comparison Tab ---
+with tab_comparison:
+    st.header("Comparison: Fourier vs Laplace")
+
+    col1, col2 = st.columns(2)
+
+    # Left: Fourier spectrum
+    with col1:
+        st.subheader("Fourier Magnitude (if exists)")
+        if fourier_exists and x_vals is not None:
+            dt = (t1_sample - t0_sample) / pts
+            freq_vals = np.fft.fftshift(np.fft.fft(x_vals))
+            freq_axis = np.fft.fftshift(np.fft.fftfreq(len(x_vals), dt))
+
+            fig_f, ax_f = plt.subplots(figsize=(6,3))
+            ax_f.plot(freq_axis, np.abs(freq_vals))
+            ax_f.set_xlim(freq_min, freq_max)
+            ax_f.set_xlabel("Frequency (Hz)")
+            ax_f.set_ylabel("|X(f)|")
+            ax_f.grid(True)
+            st.pyplot(fig_f)
+        else:
+            st.info("Fourier Transform does not exist or not plottable.")
+
+    # Right: Laplace magnitude
+    with col2:
+        st.subheader("Laplace Magnitude (if exists)")
+        if laplace_exists and Xs_expr is not None:
+            sigma_vals = np.linspace(sigma_range[0], sigma_range[1], 400)
+            Xs_abs_vals = []
+            try:
+                f_Xs = sp.lambdify(s, Xs_expr, "numpy")
+                for sigma_val in sigma_vals:
+                    Xs_abs_vals.append(abs(f_Xs(sigma_val + 1j*omega_for_sigma)))
+                fig_l, ax_l = plt.subplots(figsize=(6,3))
+                ax_l.plot(sigma_vals, Xs_abs_vals)
+                ax_l.set_xlabel("σ")
+                ax_l.set_ylabel("|X(s)|")
+                ax_l.grid(True)
+                st.pyplot(fig_l)
+            except Exception as e:
+                st.info(f"Laplace plot failed: {e}")
+        else:
+            st.info("Laplace Transform does not exist or not plottable.")
+
+    # Combined overlay if both exist
+    st.subheader("Overlay: FT vs LT (normalized)")
+    if fourier_exists and laplace_exists and x_vals is not None and Xs_expr is not None:
+        try:
+            # Fourier numeric
+            dt = t_vals[1] - t_vals[0]  # correct timestep
+            # compute FFT and scale by dt
+            Xf = np.fft.fft(x_vals) * dt
+            Xf_shift = np.fft.fftshift(Xf)
+            freq_axis = np.fft.fftshift(np.fft.fftfreq(len(x_vals), dt))  # in Hz
+
+            # Laplace numeric at ω = omega_for_sigma
+            sigma_vals = np.linspace(sigma_range[0], sigma_range[1], 400)
+            f_Xs = sp.lambdify(s, Xs_expr, "numpy")
+            Xs_abs_vals = [abs(f_Xs(sigma_val + 1j*omega_for_sigma)) for sigma_val in sigma_vals]
+
+            # Normalize both for fair comparison
+            fft_norm = np.abs(Xf_shift) / (np.max(np.abs(Xf_shift)) + 1e-9)
+            laplace_norm = np.array(Xs_abs_vals) / (np.max(Xs_abs_vals) + 1e-9)
+
+            # Plot overlay
+            fig_cmp, ax_cmp = plt.subplots(figsize=(7,3))
+            ax_cmp.plot(freq_axis, fft_norm, label="Fourier |X(ω)| (norm)", color="b")
+            ax_cmp.set_xlim(freq_min, freq_max)  # from sidebar
+            ax_cmp.set_xlabel("Frequency (Hz)")
+            ax_cmp.set_ylabel("Normalized magnitude")
+            ax_cmp.grid(True)
+
+            # Laplace curve on second x-axis
+            ax2 = ax_cmp.twiny()
+            ax2.plot(sigma_vals, laplace_norm, color="r", label="Laplace |X(s)| (norm)")
+            ax2.set_xlim(sigma_range[0], sigma_range[1])
+            ax2.set_xlabel("σ")
+
+            # Combine legends
+            lines, labels = ax_cmp.get_legend_handles_labels()
+            lines2, labels2 = ax2.get_legend_handles_labels()
+            ax_cmp.legend(lines + lines2, labels + labels2, loc="upper right")
+
+            st.pyplot(fig_cmp)
+
+
+        except Exception as e:
+            st.info(f"Overlay comparison failed: {e}")
+    else:
+        st.info("Both FT and LT must exist for overlay plot.")
